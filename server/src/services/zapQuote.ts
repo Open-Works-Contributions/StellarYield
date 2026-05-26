@@ -19,10 +19,10 @@ export interface ZapQuoteResult {
   source: "router_simulation" | "fallback_rate";
   slippageApplied: number;
   amountOutAfterSlippage: string;
-  quotedAt?: string;
-  minAmountOutStroops?: string;
-  quoteAgeMs?: number;
-  isFallback?: boolean;
+  quotedAt: string;
+  minAmountOutStroops: string;
+  quoteAgeMs: number;
+  isFallback: boolean;
 }
 
 const rpcUrl = process.env.SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org";
