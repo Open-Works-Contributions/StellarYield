@@ -43,6 +43,8 @@ tags:
     description: Prometheus-compatible metrics scrape endpoint
   - name: Liquidity
     description: Liquidity fragmentation metrics
+  - name: Simulator
+    description: Simulation endpoints for deposit, rebalance, and failover dry-runs (never executes on-chain)
 
 paths:
   /api/health:
@@ -1766,12 +1768,234 @@ paths:
           '500':
             description: Failed to stop monitoring
 
+  # ── Deposit Simulation ──────────────────────────────────────────────────────
+
+  /api/simulator/deposit:
+    post:
+      summary: Simulate a token deposit
+      description: |
+        Dry-run a deposit against a yield strategy and return projected allocations,
+        expected share count, fee breakdown, and any risk warnings. This endpoint is
+        simulation-only — it never executes a transaction or modifies on-chain state.
+        All responses include `"isSimulationOnly": true`.
+      tags:
+        - Simulator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepositSimulationRequest'
+            examples:
+              standard_deposit:
+                summary: 1000 USDC into strategy alpha-1
+                value:
+                  strategyId: "alpha-1"
+                  token: "USDC"
+                  amount: 1000
+              minimum_deposit:
+                summary: Smallest valid deposit
+                value:
+                  strategyId: "alpha-1"
+                  token: "XLM"
+                  amount: 0.0000001
+      responses:
+        '200':
+          description: Simulation completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DepositSimulationResponse'
+              examples:
+                success:
+                  summary: Typical successful simulation
+                  value:
+                    isSimulationOnly: true
+                    allocations:
+                      - protocol: "Blend"
+                        amount: 600
+                        percentage: 60
+                      - protocol: "Soroswap"
+                        amount: 400
+                        percentage: 40
+                    expectedShares: 987.5
+                    fees:
+                      - type: "entry"
+                        amount: 2.5
+                    postDepositExposure:
+                      expectedApy: 8.3
+                    warnings: []
+                with_warnings:
+                  summary: Simulation with risk warnings
+                  value:
+                    isSimulationOnly: true
+                    allocations:
+                      - protocol: "Blend"
+                        amount: 1000
+                        percentage: 100
+                    expectedShares: 990
+                    fees:
+                      - type: "entry"
+                        amount: 10
+                    postDepositExposure:
+                      expectedApy: 4.1
+                    warnings:
+                      - "Protocol liquidity is low — large deposits may experience slippage"
+        '400':
+          description: Invalid request parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationError'
+              examples:
+                missing_fields:
+                  summary: Required field absent
+                  value:
+                    error: "Missing required fields: strategyId, amount, token"
+                negative_amount:
+                  summary: Negative amount
+                  value:
+                    error: "amount must be a positive number"
+        '500':
+          description: Unexpected simulation failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulationError'
+              examples:
+                strategy_not_found:
+                  summary: Unknown strategy
+                  value:
+                    error: "Unknown strategy: no-such-strategy"
+
   # Intentionally excluded routes:
   # - Internal debugging and profiling endpoints under /internal/* are intentionally omitted from this public spec.
   # - Any admin-only endpoints that require interactive session tokens are documented above when needed; ephemeral or highly-sensitive debug routes are excluded.
 
 components:
   schemas:
+
+    # ── Simulator schemas ───────────────────────────────────────────────────
+
+    DepositSimulationRequest:
+      type: object
+      required:
+        - strategyId
+        - token
+        - amount
+      properties:
+        strategyId:
+          type: string
+          description: Identifier of the yield strategy to simulate the deposit against.
+          example: "alpha-1"
+        token:
+          type: string
+          description: Token symbol or contract address to deposit (e.g. "USDC", "XLM").
+          example: "USDC"
+        amount:
+          type: number
+          format: double
+          minimum: 0
+          exclusiveMinimum: true
+          description: Amount of `token` to deposit. Must be a positive number.
+          example: 1000
+
+    DepositSimulationResponse:
+      type: object
+      required:
+        - isSimulationOnly
+        - allocations
+        - expectedShares
+        - fees
+        - postDepositExposure
+      properties:
+        isSimulationOnly:
+          type: boolean
+          enum: [true]
+          description: Always `true`. Confirms this response is a simulation preview, not an executed transaction.
+        allocations:
+          type: array
+          description: How the deposited amount would be split across protocols.
+          items:
+            $ref: '#/components/schemas/SimulationAllocation'
+        expectedShares:
+          type: number
+          format: double
+          description: Estimated number of vault shares the depositor would receive.
+          example: 987.5
+        fees:
+          type: array
+          description: Itemised fee breakdown.
+          items:
+            $ref: '#/components/schemas/SimulationFee'
+        postDepositExposure:
+          type: object
+          description: Projected portfolio metrics after the deposit.
+          properties:
+            expectedApy:
+              type: number
+              format: double
+              description: Blended expected APY (%) after allocation.
+              example: 8.3
+        warnings:
+          type: array
+          description: Non-fatal warnings about liquidity, stale data, or risk concentration. Empty array when none.
+          items:
+            type: string
+          example: ["Protocol liquidity is low — large deposits may experience slippage"]
+
+    SimulationAllocation:
+      type: object
+      required:
+        - protocol
+        - amount
+        - percentage
+      properties:
+        protocol:
+          type: string
+          description: Protocol name receiving this portion of the deposit.
+          example: "Blend"
+        amount:
+          type: number
+          format: double
+          description: Token amount allocated to this protocol.
+          example: 600
+        percentage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Percentage of total deposit allocated to this protocol.
+          example: 60
+
+    SimulationFee:
+      type: object
+      required:
+        - type
+        - amount
+      properties:
+        type:
+          type: string
+          description: Fee category (e.g. "entry", "protocol", "performance").
+          example: "entry"
+        amount:
+          type: number
+          format: double
+          description: Fee amount in the deposit token's units.
+          example: 2.5
+
+    SimulationError:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: "Missing required fields: strategyId, amount, token"
+
+    # ── Platform schemas ─────────────────────────────────────────────────────
+
     HealthStatus:
       type: object
       properties:

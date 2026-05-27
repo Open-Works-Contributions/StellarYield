@@ -1,5 +1,6 @@
 import { PrismaClient, Incident } from "@prisma/client"; // Type verified via tsc
 import { recoveryRecommendationService, RecoveryRecommendation, ShockEvent, ShockEventType } from "./recoveryRecommendationService";
+import { PaginatedResponse, PAGINATION_DEFAULT_LIMIT, PAGINATION_MAX_LIMIT } from "../types/pagination";
 
 const prisma = new PrismaClient();
 
@@ -8,6 +9,11 @@ export interface IncidentFilter {
     severity?: string;
     type?: string;
     resolved?: boolean;
+}
+
+export interface IncidentPageOptions {
+    cursor?: string;
+    limit?: number;
 }
 
 export interface IncidentWithRecommendations extends Incident {
@@ -51,6 +57,35 @@ export class IncidentService {
                 startedAt: "desc",
             },
         });
+    }
+
+    async getIncidentsPaginated(
+        filter: IncidentFilter,
+        options: IncidentPageOptions,
+    ): Promise<PaginatedResponse<Incident>> {
+        const limit = Math.min(
+            Math.max(1, options.limit ?? PAGINATION_DEFAULT_LIMIT),
+            PAGINATION_MAX_LIMIT,
+        );
+
+        const rows = await prisma.incident.findMany({
+            where: {
+                protocol: filter.protocol || undefined,
+                severity: filter.severity || undefined,
+                type: filter.type || undefined,
+                resolved: filter.resolved,
+                ...(options.cursor ? { id: { lt: options.cursor } } : {}),
+            },
+            orderBy: { startedAt: "desc" },
+            // Fetch one extra to determine whether a next page exists.
+            take: limit + 1,
+        });
+
+        const hasMore = rows.length > limit;
+        const data = hasMore ? rows.slice(0, limit) : rows;
+        const nextCursor = hasMore ? data[data.length - 1].id : null;
+
+        return { data, pagination: { nextCursor, hasMore, limit } };
     }
 
     async getIncidentById(id: string): Promise<Incident | null> {

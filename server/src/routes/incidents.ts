@@ -1,18 +1,41 @@
 import { Router, Request, Response } from "express";
 import { incidentService, IncidentFilter } from "../services/incidentService";
+import { parsePaginationLimit } from "../types/pagination";
 
 const router = Router();
 
+/**
+ * GET /api/incidents
+ *
+ * Returns a paginated list of incidents ordered by `startedAt` descending.
+ *
+ * Query parameters:
+ *   protocol  — filter by protocol name (optional)
+ *   severity  — filter by severity (optional)
+ *   type      — filter by incident type (optional)
+ *   resolved  — "true" | "false" (optional)
+ *   cursor    — opaque cursor from a previous response's `pagination.nextCursor` (optional)
+ *   limit     — items per page, 1–100 (default 20)
+ *
+ * Response:
+ *   {
+ *     "data": [...incidents],
+ *     "pagination": { "nextCursor": string|null, "hasMore": boolean, "limit": number }
+ *   }
+ */
 router.get("/", async (req: Request, res: Response) => {
     try {
         const filter: IncidentFilter = {
-            protocol: req.query.protocol as string,
-            severity: req.query.severity as string,
-            type: req.query.type as string,
+            protocol: req.query.protocol as string | undefined,
+            severity: req.query.severity as string | undefined,
+            type: req.query.type as string | undefined,
             resolved: req.query.resolved === "true" ? true : req.query.resolved === "false" ? false : undefined,
         };
-        const incidents = await incidentService.getIncidents(filter);
-        res.json(incidents);
+        const page = await incidentService.getIncidentsPaginated(filter, {
+            cursor: req.query.cursor as string | undefined,
+            limit: parsePaginationLimit(req.query.limit),
+        });
+        res.json(page);
     } catch {
         res.status(500).json({ error: "Failed to fetch incidents" });
     }
